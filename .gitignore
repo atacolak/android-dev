@@ -1,0 +1,33 @@
+# local toolchain and caches (never commit)
+/.local/
+/opt/
+/sdk/
+/ndk/
+/jdk/
+/.adev-state/
+/.gradle/
+/tmp/
+*.apk
+*.aab
+*.apks
+*.idsig
+*.gguf
+*.so
+*.keystore
+*.jks
+local.properties
+.env
+.env.*
+!.env.example
+
+# editor
+/.idea/
+*.iml
+.vscode/
+*~
+*.swp
+.DS_Store
+._*
+
+# rust
+/target/

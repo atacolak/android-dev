@@ -1,0 +1,15 @@
+android-dev fold device adapter
+================================
+
+`lib/fold.sh` is extracted from `scripts/xrctl` in the atacolak XR control
+repository. Transport:
+
+    this host -> SSH host `fold` (Termux) -> Fold-local adb
+              -> 127.0.0.1:<current Wireless Debugging port> -> Android
+
+The rotating Wireless Debugging port is discovered on the device. This repo
+does not scan for it over the network, delete ADB identities, or replace
+app signing certificates.
+
+xrctl itself is unchanged and remains the XR project harness. Callers of
+xrctl are not migrated here.

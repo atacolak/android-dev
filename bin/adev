@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Portable android-dev CLI. Source-free; locates the repo from $0.
+set -euo pipefail
+
+ADEV_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export ADEV_ROOT
+# shellcheck disable=SC1091
+. "$ADEV_ROOT/lib/adev-common.sh"
+load_env
+load_profile
+# shellcheck disable=SC1091
+. "$ADEV_ROOT/lib/fold.sh"
+# shellcheck disable=SC1091
+. "$ADEV_ROOT/lib/generic.sh"
+
+usage() {
+  cat <<'EOFU'
+Usage: adev <command> [args]
+
+Toolchain (no phone)
+  env                      print exports for the pinned toolchain
+  bootstrap                idempotent JDK/SDK/NDK/Rust install
+  doctor [--offline]       diagnose host (+ optional device)
+  ci-smoke                 lint/smoke with no attached phone
+
+Companion app
+  clone-app [dir]          clone android-transcribe (+ upstream remote)
+  build [dir]              ./gradlew assembleDebug in companion app
+  test [dir]               cargo test + no-device gradle unit tasks if present
+
+Device (profile: fold | generic; ADEV_PROFILE)
+  device status            SSH + adb state
+  adb ensure               make Fold-local wireless ADB `device`
+  adb shell <args...>      adb shell on the live serial
+  adb pair <code> <port>   one-time Wireless Debugging pair (fold)
+  deploy <apk> --package <pkg>
+  launch <pkg>
+  stop <pkg>
+  smoke <pkg>
+  logs <pkg>
+  screenshot [path]
+  pull <remote> <local>
+
+Env: ADEV_PROFILE ADEV_SSH_HOST ADEV_APP ANDROID_SDK_ROOT JAVA_HOME
+Profiles: fold (default) | generic
+EOFU
+}
+
+cmd_env() {
+  echo "export ADEV_ROOT=$(printf '%q' "$ADEV_ROOT")"
+  echo "export JAVA_HOME=$(printf '%q' "${JAVA_HOME:-}")"
+  echo "export ANDROID_SDK_ROOT=$(printf '%q' "${ANDROID_SDK_ROOT:-}")"
+  echo "export ANDROID_HOME=$(printf '%q' "${ANDROID_HOME:-}")"
+  echo "export ANDROID_NDK_HOME=$(printf '%q' "${ANDROID_NDK_HOME:-}")"
+  echo "export ANDROID_NDK_ROOT=$(printf '%q' "${ANDROID_NDK_ROOT:-}")"
+  echo "export ANDROID_NDK=$(printf '%q' "${ANDROID_NDK:-}")"
+  echo "export ADEV_PROFILE=$(printf '%q' "${ADEV_PROFILE:-fold}")"
+  echo "export ADEV_APP=$(printf '%q' "${ADEV_APP:-}")"
+  echo "export PATH=$(printf '%q' "$PATH")"
+}
+
+cmd_clone_app() {
+  local dir="${1:-$ADEV_APP}"
+  if [ -d "$dir/.git" ]; then
+    log "app already cloned at $dir"
+    git -C "$dir" remote -v
+    if ! git -C "$dir" remote | grep -qx upstream; then
+      git -C "$dir" remote add upstream "$ADEV_APP_UPSTREAM"
+      log "added upstream $ADEV_APP_UPSTREAM"
+    fi
+    return 0
+  fi
+  mkdir -p "$(dirname "$dir")"
+  git clone "$ADEV_APP_REPO" "$dir"
+  git -C "$dir" remote add upstream "$ADEV_APP_UPSTREAM"
+  git -C "$dir" fetch upstream || true
+  log "cloned $dir"
+}
+
+cmd_build() {
+  local dir="${1:-$ADEV_APP}"
+  [ -x "$dir/gradlew" ] || die "no gradlew in $dir"
+  if [ -n "${JAVA_HOME:-}" ] && [ -d "$JAVA_HOME" ]; then
+    # companion gradle.properties may pin a missing Studio JBR; override.
+    (cd "$dir" && ./gradlew assembleDebug -Dorg.gradle.java.home="$JAVA_HOME")
+  else
+    (cd "$dir" && ./gradlew assembleDebug)
+  fi
+}
+
+cmd_test() {
+  local dir="${1:-$ADEV_APP}"
+  [ -d "$dir" ] || die "app dir missing: $dir"
+  if [ -f "$dir/Cargo.toml" ]; then
+    (cd "$dir" && cargo test --offline --lib 2>/dev/null || cargo test --lib)
+  fi
+}
+
+dispatch_device() {
+  local fn="$1"; shift
+  case "${ADEV_PROFILE:-fold}" in
+    fold) "fold_$fn" "$@" ;;
+    generic) "generic_$fn" "$@" ;;
+    *) die "unknown profile ${ADEV_PROFILE}" ;;
+  esac
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    ""|-h|--help|help) usage ;;
+    env) cmd_env ;;
+    bootstrap) exec "$ADEV_ROOT/scripts/bootstrap.sh" "$@" ;;
+    doctor) exec "$ADEV_ROOT/scripts/doctor.sh" "$@" ;;
+    ci-smoke) exec "$ADEV_ROOT/scripts/ci-smoke.sh" "$@" ;;
+    clone-app) cmd_clone_app "$@" ;;
+    build) cmd_build "$@" ;;
+    test) cmd_test "$@" ;;
+    device)
+      case "${1:-}" in
+        status|"") dispatch_device device_status ;;
+        *) die "usage: adev device status" ;;
+      esac
+      ;;
+    adb)
+      case "${1:-}" in
+        ensure) shift; dispatch_device adb_ensure "$@" ;;
+        shell) shift; dispatch_device adb_shell "$@" ;;
+        pair) shift; dispatch_device adb_pair "$@" ;;
+        *) die "usage: adev adb ensure|shell|pair" ;;
+      esac
+      ;;
+    deploy) dispatch_device deploy "$@" ;;
+    launch) dispatch_device launch "$@" ;;
+    stop) dispatch_device stop "$@" ;;
+    smoke) dispatch_device smoke "$@" ;;
+    logs) dispatch_device logs "$@" ;;
+    screenshot) dispatch_device screenshot "${1:-}" ;;
+    pull) dispatch_device pull "${1:-}" "${2:-}" ;;
+    *) usage; die "unknown command: $cmd" ;;
+  esac
+}
+
+main "$@"
